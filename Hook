@@ -1,0 +1,176 @@
+// src/hooks/useLocalStorage.js
+import { useState, useEffect } from 'react';
+
+export default function useLocalStorage(key, initialValue) {
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch {
+      // ignore write errors (private mode)
+    }
+  }, [key, state]);
+
+  return [state, setState];
+}
+// src/hooks/useModal.js
+import { useCallback, useState } from 'react';
+
+export default function useModal(initial = { open: false, payload: null }) {
+  const [modal, setModal] = useState(initial);
+
+  const open = useCallback((payload = null) => {
+    setModal({ open: true, payload });
+  }, []);
+
+  const close = useCallback(() => {
+    setModal({ open: false, payload: null });
+  }, []);
+
+  return {
+    isOpen: modal.open,
+    payload: modal.payload,
+    open,
+    close,
+    setModal,
+  };
+}
+const detailModal = useModal();
+<Button onClick={() => detailModal.open(fund)}>Open</Button>
+{detailModal.isOpen && <FundModal fund={detailModal.payload} onClose={detailModal.close} />}
+// src/hooks/useDebounce.js
+import { useEffect, useState } from 'react';
+
+export default function useDebounce(value, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t); // cleanup on value/delay change
+  }, [value, delay]);
+
+  return debounced;
+}
+const [q, setQ] = useState('');
+const debouncedQ = useDebounce(q, 300);
+// use debouncedQ to fetch or filter
+// src/hooks/useFunds.js
+import { useEffect, useRef, useState } from 'react';
+import * as api from '../services/api'; // your axios wrapper or mock funcs
+
+export default function useFunds() {
+  const [funds, setFunds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const cacheRef = useRef(null);
+  const controllerRef = useRef(null);
+
+  useEffect(() => {
+    let mounted = true;
+    // return cached value quickly
+    if (cacheRef.current) {
+      setFunds(cacheRef.current);
+      setLoading(false);
+      return;
+    }
+
+    controllerRef.current = new AbortController();
+    setLoading(true);
+    api.fetchFunds({ signal: controllerRef.current.signal })
+      .then(resp => {
+        if (!mounted) return;
+        setFunds(resp.data);
+        cacheRef.current = resp.data; // simple in-memory cache
+      })
+      .catch(err => {
+        if (!mounted) return;
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        setError(err.message || 'Failed to fetch funds');
+      })
+      .finally(() => mounted && setLoading(false));
+
+    return () => {
+      mounted = false;
+      if (controllerRef.current) controllerRef.current.abort();
+    };
+  }, []);
+
+  return { funds, setFunds, loading, error };
+}
+const { funds, loading, error } = useFunds();
+// src/hooks/useAuth.js
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { auth } from '../services/firebase'; // optional
+import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // If you want anonymous sign-in when no config:
+    signInAnonymously(auth).catch(()=>{ /* ignore */ });
+
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      // derive role from email or custom claims (demo):
+      setRole(u?.email === 'admin@finvest.com' ? 'admin' : 'user');
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  const logout = async () => {
+    await signOut(auth);
+    setUser(null);
+    setRole(null);
+  };
+
+  const value = useMemo(() => ({ user, role, loading, logout }), [user, role, loading]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+};
+import { AuthProvider } from './hooks/useAuth';
+<AuthProvider><App /></AuthProvider>
+// src/App.jsx (excerpt)
+import { useAuth } from './hooks/useAuth';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Dashboard from './pages/Dashboard';
+import AdminPanel from './pages/AdminPanel';
+import Login from './pages/Login';
+
+function Protected({ children, role }) {
+  const { user, loading, role: userRole } = useAuth();
+  if (loading) return <div>Loading...</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (role && userRole !== role) return <Navigate to="/" replace />;
+  return children;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/" element={<Protected><Dashboard /></Protected>} />
+      <Route path="/admin" element={<Protected role="admin"><AdminPanel/></Protected>} />
+    </Routes>
+  );
+}
