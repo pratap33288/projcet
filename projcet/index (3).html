@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mutual Funds Selection Platform</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-blue': '#1e40af',
+                        'secondary-gray': '#f3f4f6',
+                        'accent-green': '#10b981',
+                        'star-gold': '#fbbf24', // New gold color for ratings
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        .scroll-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scroll-thin::-webkit-scrollbar-thumb {
+            background-color: #d1d5db;
+            border-radius: 3px;
+        }
+        /* CSS for Star Rating */
+        .star {
+            color: #fbbf24;
+            display: inline-block;
+            font-size: 1.1em;
+            margin-right: 1px;
+        }
+    </style>
+</head>
+<body class="bg-secondary-gray min-h-screen flex items-center justify-center font-sans p-4">
+
+    <!-- Main Application Container -->
+    <div id="app-container" class="w-full max-w-4xl bg-white shadow-2xl rounded-xl overflow-hidden min-h-[600px] flex flex-col md:flex-row">
+        
+        <!-- Sidebar/Branding (Desktop Only) -->
+        <div class="hidden md:flex w-1/3 bg-primary-blue text-white p-8 flex-col justify-between">
+            <div>
+                <h1 class="text-3xl font-bold mb-4">FinVest Pro</h1>
+                <p class="text-indigo-200">Your personalized guide to smart mutual fund investment.</p>
+            </div>
+            <div class="mt-8">
+                <p class="text-sm">Project PS06: Investment Perception & Selection</p>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="w-full md:w-2/3 p-6 sm:p-10 flex flex-col justify-center items-center">
+            
+            <!-- Dynamic View Holder -->
+            <div id="view-container" class="w-full h-full flex justify-center items-center">
+                <!-- Content injected here by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Box Modal (For alerts and confirmations) -->
+    <div id="message-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-primary-blue"></h3>
+            <p id="modal-content" class="text-gray-600 mb-4"></p>
+            <button onclick="document.getElementById('message-modal').classList.add('hidden')" class="w-full bg-primary-blue text-white py-2 rounded-lg hover:bg-indigo-700 transition duration-150">Close</button>
+        </div>
+    </div>
+
+    <!-- Fund Detail & Investment Checkout Modal (NEW) -->
+    <div id="fund-detail-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-40 p-4 transition-opacity duration-300">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <h3 class="text-2xl font-bold mb-4 text-primary-blue" id="detail-fund-name"></h3>
+            <div class="space-y-4 mb-6" id="detail-fund-data">
+                <!-- Fund details will be injected here -->
+            </div>
+
+            <!-- Investment Form -->
+            <h4 class="text-xl font-semibold mb-4 border-t pt-4">Investment Checkout</h4>
+            <form id="investment-form">
+                <div class="space-y-4">
+                    <div>
+                        <label for="investment-amount" class="block text-sm font-medium text-gray-700">Investment Amount (USD)</label>
+                        <input type="number" id="investment-amount" name="amount" min="100" required class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-inner focus:outline-none focus:ring-2 focus:ring-accent-green focus:border-accent-green" placeholder="Min $100">
+                    </div>
+                    <div>
+                        <label for="bank-digits" class="block text-sm font-medium text-gray-700">Bank Account Number (Last 4 Digits)</label>
+                        <input type="text" id="bank-digits" name="bank" pattern="\d{4}" maxlength="4" required class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-inner focus:outline-none focus:ring-2 focus:ring-accent-green focus:border-accent-green" placeholder="e.g., 4321">
+                        <p class="text-xs text-gray-500 mt-1">This is a mock application. No actual financial data is stored.</p>
+                    </div>
+                    <button type="submit" class="w-full bg-accent-green text-white py-3 rounded-lg font-bold hover:bg-green-600 transition duration-150 shadow-md">
+                        Confirm Investment
+                    </button>
+                    <button type="button" onclick="document.getElementById('fund-detail-modal').classList.add('hidden')" class="w-full text-primary-blue border border-primary-blue py-3 rounded-lg font-bold hover:bg-indigo-50 transition duration-150">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, orderBy, where, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL ENVIRONMENT VARIABLES (Mandatory Setup) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        // Define a safe fallback config to prevent app crash when environment variables are missing
+        const DUMMY_FIREBASE_CONFIG = {
+            apiKey: "dummy-key",
+            authDomain: "dummy-project.firebaseapp.com",
+            projectId: "dummy-project",
+            storageBucket: "dummy-project.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:dummy"
+        };
+        
+        // Use the injected config if available, otherwise use the dummy config
+        const firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config) ? JSON.parse(__firebase_config) : DUMMY_FIREBASE_CONFIG;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const isDummyConfig = firebaseConfig === DUMMY_FIREBASE_CONFIG;
+        // --------------------------------------------------------
+
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+        let userRole = null; // New: 'user' or 'admin'
+        
+        // --- Mock Data Model for Mutual Funds (Expanded Details) ---
+        const MOCK_FUNDS = [
+            // Added 3Y Return and Rating fields
+            { id: 'F001', name: 'Tech Giants Index', category: 'Equity', type: 'Large Cap', risk: 'Medium-High', aum: 45.2, returnYTD: 22.1, return3Y: 15.5, expenseRatio: 0.95, rating: 5 },
+            { id: 'F002', name: 'Money Market Liquidity', category: 'Debt', type: 'Liquid', risk: 'Very Low', aum: 18.9, returnYTD: 5.1, return3Y: 4.8, expenseRatio: 0.20, rating: 4 },
+            { id: 'F003', name: 'Balanced Growth Hybrid', category: 'Hybrid', type: 'Value', risk: 'Medium', aum: 22.4, returnYTD: 12.3, return3Y: 9.9, expenseRatio: 1.10, rating: 4 },
+            { id: 'F004', name: 'Emerging Markets Alpha', category: 'Equity', type: 'International', risk: 'High', aum: 5.1, returnYTD: 25.9, return3Y: 18.2, expenseRatio: 1.50, rating: 3 },
+            { id: 'F005', name: 'Short Duration Bond', category: 'Debt', type: 'Gilt', risk: 'Low', aum: 10.5, returnYTD: 6.5, return3Y: 5.5, expenseRatio: 0.05, rating: 5 },
+            { id: 'F006', name: 'Small Cap Dynamo', category: 'Equity', type: 'Small Cap', risk: 'Very High', aum: 3.8, returnYTD: 35.0, return3Y: 25.1, expenseRatio: 1.90, rating: 4 },
+            { id: 'F007', name: 'Infrastructure Focus', category: 'Equity', type: 'Sectoral', risk: 'Medium', aum: 11.0, returnYTD: 15.8, return3Y: 10.1, expenseRatio: 1.20, rating: 4 }
+        ];
+
+        // --- Mock Data Model for Admin Features ---
+        const MOCK_ADMIN_USERS = [
+            { id: 'USER-1001', email: 'alice@example.com', investments: 2, status: 'Active' },
+            { id: 'USER-1002', email: 'bob@example.com', investments: 0, status: 'Inactive' },
+            { id: 'USER-1003', email: 'charlie@example.com', investments: 5, status: 'Active' },
+        ];
+
+        const MOCK_PENDING_FUNDS = [
+            { id: 'P001', name: 'AI Robotics Fund', category: 'Thematic', sponsor: 'Alpha Assets', date: '2025-10-20' },
+            { id: 'P002', name: 'Global Health Bond', category: 'Debt', sponsor: 'Secure Capital', date: '2025-11-01' },
+        ];
+
+
+        // --- Utility Functions ---
+
+        function showMessage(title, content) {
+            const modal = document.getElementById('message-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-content').textContent = content;
+            modal.classList.remove('hidden');
+        }
+
+        function setLoading(isLoading) {
+            const button = document.getElementById('submit-button');
+            if (!button) return;
+            
+            if (isLoading) {
+                button.disabled = true;
+                button.innerHTML = '<svg class="animate-spin h-5 w-5 mr-3 text-white inline" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...';
+            } else {
+                button.disabled = false;
+                button.textContent = button.dataset.originalText || 'Submit';
+            }
+        }
+        
+        /**
+         * Generates the star rating HTML based on the fund's rating (1-5).
+         * @param {number} rating - The numerical rating.
+         * @returns {string} HTML string with stars.
+         */
+        function getRatingHtml(rating) {
+            let stars = '';
+            for (let i = 0; i < 5; i++) {
+                if (i < rating) {
+                    stars += '<span class="star">&#9733;</span>'; // Solid star
+                } else {
+                    stars += '<span class="star text-gray-300">&#9733;</span>'; // Empty star (visually)
+                }
+            }
+            return `<div class="flex items-center text-sm">${stars}</div>`;
+        }
+
+        /**
+         * Renders the login/signup form view.
+         * @param {boolean} isLogin - True for Login form, False for Signup form.
+         */
+        function renderAuthView(isLogin = true) {
+            const container = document.getElementById('view-container');
+            const modeText = isLogin ? 'Login' : 'Sign Up';
+            const switchText = isLogin ? 'Need an account? Create one' : 'Already have an account? Log In';
+            const switchAction = isLogin ? 'renderAuthView(false)' : 'renderAuthView(true)';
+            const actionFunction = isLogin ? 'handleLogin(event)' : 'handleSignup(event)';
+            const submitText = isLogin ? 'Secure Log In' : 'Create FinVest Account';
+            
+            // Icon SVG (A simple graph/chart icon for financial theme)
+            const iconSvg = `
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-primary-blue mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 3v18h18" />
+                    <path d="M18 17l-5-5-4 4-2-2" />
+                    <path d="M18 7l-5 5-4-4-2 2" />
+                </svg>
+            `;
+
+            container.innerHTML = `
+                <div class="w-full max-w-sm p-8 bg-white rounded-xl shadow-2xl transform hover:scale-[1.01] transition-transform duration-300">
+                    <div class="mb-8 text-center">
+                        ${iconSvg}
+                        <h2 class="text-3xl font-extrabold text-gray-900 mt-4">${modeText}</h2>
+                        <p class="text-sm text-gray-500">to **FinVest Pro** - Your Investment Edge</p>
+                    </div>
+                    <form onsubmit="${actionFunction}" class="space-y-6">
+                        <div>
+                            <label for="email" class="block text-sm font-semibold text-gray-700">Email Address</label>
+                            <input id="email" name="email" type="email" autocomplete="email" required class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-inner placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-primary-blue sm:text-sm transition duration-150">
+                        </div>
+
+                        <div>
+                            <label for="password" class="block text-sm font-semibold text-gray-700">Password</label>
+                            <input id="password" name="password" type="password" autocomplete="current-password" required class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-inner placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-primary-blue sm:text-sm transition duration-150">
+                        </div>
+
+                        <button id="submit-button" data-original-text="${submitText}" type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-lg text-base font-bold text-white bg-primary-blue hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-blue transition duration-200 transform hover:scale-[1.005]">
+                            ${submitText}
+                        </button>
+                    </form>
+
+                    <p class="mt-8 text-center text-sm text-gray-600">
+                        <a href="#" onclick="${switchAction}" class="font-medium text-primary-blue hover:text-indigo-500 transition duration-150 border-b border-primary-blue/50 hover:border-transparent">
+                            ${switchText}
+                        </a>
+                    </p>
+                    ${isLogin && isDummyConfig ? '<p class="mt-4 text-xs text-center text-red-500">Mock Admin Login: admin@finvest.com / adminpass</p>' : ''}
+                </div>
+            `;
+        }
+
+        /**
+         * Dispatcher function: Renders the appropriate dashboard view based on userRole.
+         */
+        function renderMainDashboard() {
+            if (userRole === 'admin') {
+                renderAdminDashboard();
+            } else {
+                renderUserDashboard(); // Renders the user's fund list view
+            }
+            
+            // Check if we are in mock mode and display a message on the dashboard if so
+            if (isDummyConfig) {
+                 const roleDisplay = userRole ? userRole.toUpperCase() : 'N/A';
+                 showMessage('Mock Mode Active', `A valid Firebase API key is required for real authentication. Displaying mock data for ${roleDisplay} role with mock user ID.`);
+            }
+        }
+
+
+        /**
+         * Renders the standard user dashboard view with mutual fund data. (Previous renderDashboardView)
+         */
+        function renderUserDashboard() {
+            const container = document.getElementById('view-container');
+            
+            // Build the fund list HTML
+            const fundListHtml = MOCK_FUNDS.map(fund => `
+                <div onclick="renderFundDetailModal('${fund.id}')" class="cursor-pointer bg-white p-4 rounded-xl shadow-md border-t-4 border-primary-blue hover:shadow-lg hover:ring-2 hover:ring-primary-blue transition duration-150">
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="text-xl font-bold text-primary-blue">${fund.name}</h3>
+                        ${getRatingHtml(fund.rating)}
+                    </div>
+                    
+                    <div class="text-sm text-gray-600 grid grid-cols-2 gap-y-2">
+                        <p><strong class="text-gray-800">Category:</strong> ${fund.category}</p>
+                        <p><strong class="text-gray-800">Type:</strong> ${fund.type}</p>
+                        <p><strong class="text-gray-800">Risk:</strong> <span class="font-medium">${fund.risk}</span></p>
+                        <p><strong class="text-gray-800">AUM (Bn):</strong> $${fund.aum.toFixed(1)}</p>
+                        
+                        <!-- Return details in a single row -->
+                        <div class="col-span-2 flex justify-between pt-2 border-t border-gray-100 mt-2">
+                            <span class="text-xs font-semibold px-2 py-1 rounded-full ${fund.returnYTD > 10 ? 'bg-accent-green/20 text-accent-green' : 'bg-yellow-100 text-yellow-800'}">
+                                YTD: ${fund.returnYTD.toFixed(1)}% 
+                            </span>
+                            <span class="text-xs font-semibold px-2 py-1 rounded-full ${fund.return3Y > 8 ? 'bg-accent-green/20 text-accent-green' : 'bg-yellow-100 text-yellow-800'}">
+                                3Y: ${fund.return3Y.toFixed(1)}% 
+                            </span>
+                        </div>
+
+                        <p class="col-span-2 mt-2"><strong class="text-gray-800">Expense Ratio:</strong> ${fund.expenseRatio.toFixed(2)}%</p>
+                    </div>
+                </div>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="w-full flex flex-col h-full">
+                    <!-- Header -->
+                    <div class="flex justify-between items-center w-full pb-4 border-b border-gray-200 mb-6">
+                        <h2 class="text-3xl font-bold text-gray-900">Investment Dashboard</h2>
+                        <button onclick="handleLogout()" class="bg-red-500 text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-red-600 transition duration-150 shadow-md">
+                            Logout
+                        </button>
+                    </div>
+
+                    <!-- User Information (Mandatory for Multi-user apps) -->
+                    <div class="bg-indigo-100 p-3 rounded-lg text-sm text-primary-blue mb-6 border border-indigo-200">
+                         <strong>User ID:</strong> <span class="font-mono text-xs break-all">${userId || 'N/A'}</span>
+                    </div>
+                    
+                    <!-- Mutual Funds List -->
+                    <div class="flex-grow overflow-y-auto scroll-thin pr-2">
+                        <h3 class="text-xl font-semibold mb-5 text-gray-800">Featured Mutual Funds (${MOCK_FUNDS.length} models)</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            ${fundListHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the admin control panel with user management and fund approvals.
+         */
+        function renderAdminDashboard() {
+            const container = document.getElementById('view-container');
+            
+            const userListHtml = MOCK_ADMIN_USERS.map(user => `
+                <li class="p-3 flex justify-between items-center border-b border-gray-100 last:border-b-0 hover:bg-secondary-gray rounded-md transition duration-100">
+                    <span class="font-medium text-gray-700">${user.email}</span>
+                    <span class="text-sm text-gray-500">Investments: ${user.investments}</span>
+                    <span class="text-xs font-semibold px-2 py-1 rounded-full ${user.status === 'Active' ? 'bg-accent-green/20 text-accent-green' : 'bg-red-100 text-red-700'}">${user.status}</span>
+                </li>
+            `).join('');
+
+            const pendingFundsHtml = MOCK_PENDING_FUNDS.map(fund => `
+                <div class="p-4 bg-white shadow-md rounded-lg border border-yellow-300/50">
+                    <h4 class="font-bold text-primary-blue">${fund.name}</h4>
+                    <p class="text-sm text-gray-600">Sponsor: ${fund.sponsor}</p>
+                    <p class="text-xs text-gray-500 mb-2">Submitted: ${fund.date}</p>
+                    <div class="flex space-x-2 mt-2">
+                        <button onclick="showMessage('Action Success', 'Approved fund ${fund.id}')" class="text-xs bg-accent-green text-white px-3 py-1 rounded-full hover:bg-green-600">Approve</button>
+                        <button onclick="showMessage('Action Success', 'Rejected fund ${fund.id}')" class="text-xs bg-red-500 text-white px-3 py-1 rounded-full hover:bg-red-600">Reject</button>
+                    </div>
+                </div>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="w-full flex flex-col h-full">
+                    <!-- Header -->
+                    <div class="flex justify-between items-center w-full pb-4 border-b border-gray-200 mb-6">
+                        <h2 class="text-3xl font-bold text-red-700">Admin Control Panel</h2>
+                        <button onclick="handleLogout()" class="bg-red-500 text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-red-600 transition duration-150 shadow-md">
+                            Logout
+                        </button>
+                    </div>
+
+                    <!-- User Information -->
+                    <div class="bg-red-100 p-3 rounded-lg text-sm text-red-700 mb-6 border border-red-300">
+                         <strong>ADMIN ID:</strong> <span class="font-mono text-xs break-all">${userId || 'N/A'}</span>
+                    </div>
+                    
+                    <div class="flex-grow overflow-y-auto scroll-thin pr-2 space-y-8">
+                        <!-- User Management -->
+                        <div class="bg-white p-5 rounded-xl shadow-lg border border-gray-100">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">User Management (${MOCK_ADMIN_USERS.length} Total)</h3>
+                            <ul class="divide-y divide-gray-100">
+                                ${userListHtml}
+                            </ul>
+                        </div>
+
+                        <!-- Fund Approvals -->
+                        <div class="bg-white p-5 rounded-xl shadow-lg border border-gray-100">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Pending Fund Approvals (${MOCK_PENDING_FUNDS.length})</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                ${pendingFundsHtml}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the modal with details for a specific fund and investment form.
+         * @param {string} fundId - The ID of the fund to display.
+         */
+        window.renderFundDetailModal = (fundId) => {
+            const fund = MOCK_FUNDS.find(f => f.id === fundId);
+            if (!fund) return;
+
+            const modal = document.getElementById('fund-detail-modal');
+            const detailName = document.getElementById('detail-fund-name');
+            const detailData = document.getElementById('detail-fund-data');
+            const investmentForm = document.getElementById('investment-form');
+
+            detailName.textContent = fund.name;
+            
+            // Populate details section
+            detailData.innerHTML = `
+                <div class="grid grid-cols-2 gap-2 text-base">
+                    <p><strong class="text-gray-800">Category:</strong> ${fund.category}</p>
+                    <p><strong class="text-gray-800">Type:</strong> ${fund.type}</p>
+                    <p><strong class="text-gray-800">Risk:</strong> ${fund.risk}</p>
+                    <p><strong class="text-gray-800">AUM (Bn):</strong> $${fund.aum.toFixed(1)}</p>
+                    <p class="col-span-2"><strong class="text-gray-800">Expense Ratio:</strong> ${fund.expenseRatio.toFixed(2)}%</p>
+                </div>
+                <div class="flex justify-around bg-secondary-gray p-3 rounded-lg">
+                    <div class="text-center">
+                        <p class="text-lg font-bold ${fund.returnYTD > 10 ? 'text-accent-green' : 'text-yellow-800'}">${fund.returnYTD.toFixed(1)}%</p>
+                        <p class="text-sm text-gray-500">YTD Return</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-lg font-bold ${fund.return3Y > 8 ? 'text-accent-green' : 'text-yellow-800'}">${fund.return3Y.toFixed(1)}%</p>
+                        <p class="text-sm text-gray-500">3-Year Return</p>
+                    </div>
+                    <div class="text-center">
+                        ${getRatingHtml(fund.rating)}
+                        <p class="text-sm text-gray-500">Rating</p>
+                    </div>
+                </div>
+            `;
+            
+            // Attach specific fund ID to form submission
+            investmentForm.onsubmit = (event) => handleInvestmentConfirm(event, fund.id, fund.name);
+            
+            modal.classList.remove('hidden');
+        };
+
+        /**
+         * Handles the simulated investment confirmation.
+         */
+        window.handleInvestmentConfirm = async (event, fundId, fundName) => {
+            event.preventDefault();
+            
+            const form = event.target;
+            const amount = parseFloat(form.amount.value);
+            const bankDigits = form.bank.value;
+
+            document.getElementById('fund-detail-modal').classList.add('hidden');
+
+            await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
+
+            if (amount < 100) {
+                 showMessage('Investment Error', 'Minimum investment amount is $100.');
+                 return;
+            }
+
+            // Simulate a transaction confirmation
+            showMessage(
+                'Investment Confirmed', 
+                `Successfully initiated investment of $${amount.toFixed(2)} into the ${fundName} fund. A confirmation was sent to your linked bank account ending in ${bankDigits}. Thank you for investing! (Note: This transaction is simulated in mock mode.)`
+            );
+            
+            // Reset the form for the next use
+            form.reset();
+        };
+
+
+        // --- Authentication Handlers ---
+
+        async function initFirebase() {
+            // Check if we are using the dummy config
+            if (isDummyConfig) {
+                 console.warn("Firebase configuration is missing. Using DUMMY configuration. Auth and DB operations will be MOCKED.");
+                 // Bypass actual Firebase initialization and jump to dashboard with a mock user.
+                 userId = 'MOCK-USER-FINVEST-PRO-7890'; // A distinct mock ID
+                 userRole = 'user'; // Default role
+                 isAuthReady = true;
+                 renderMainDashboard();
+                 return; // Stop initialization here
+            }
+
+            try {
+                // setLogLevel('Debug'); // Uncomment for debugging
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // 1. Set up Auth State Listener
+                onAuthStateChanged(auth, (user) => {
+                    isAuthReady = true;
+                    if (user) {
+                        userId = user.uid;
+                        // In a real app, you would fetch the user's role from Firestore here.
+                        userRole = 'user'; // Default to 'user' for real auth
+                        renderMainDashboard();
+                    } else {
+                        userId = null;
+                        userRole = null;
+                        renderAuthView(true); // Default to Login view
+                    }
+                });
+
+                // 2. Initial Sign-in Attempt
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    // Fallback to anonymous sign-in if no token is present
+                    await signInAnonymously(auth);
+                }
+
+            } catch (error) {
+                console.error("Firebase initialization or initial sign-in failed:", error);
+                // Only show a message if the error is serious and not just due to dummy config limitations
+                if (!isDummyConfig) {
+                     showMessage('Initialization Error', `Failed to set up Firebase: ${error.message}`);
+                }
+            }
+        }
+
+        // --- AUTHENTICATION LOGIC ---
+
+        window.handleSignup = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const email = form.email.value;
+            const password = form.password.value;
+            
+            setLoading(true);
+
+            if (isDummyConfig) {
+                // Mock successful signup in mock mode (always a regular user)
+                userId = 'MOCK-USER-FINVEST-PRO-7890';
+                userRole = 'user';
+                showMessage('Success!', 'Account created successfully (Mock Mode). You are now logged in as a standard user.');
+                renderMainDashboard();
+                setLoading(false);
+                return;
+            }
+
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                // Note: In a real app, you'd save the default role ('user') to Firestore here.
+                showMessage('Success!', 'Account created successfully! You are now logged in.');
+            } catch (error) {
+                console.error("Signup failed:", error);
+                const errorMessage = error.code.includes('email-already-in-use') ? 'This email is already registered.' :
+                                     error.code.includes('operation-not-allowed') ? 'Sign up failed: Email/Password authentication is disabled in Firebase console.' : 
+                                     error.message;
+                showMessage('Signup Failed', errorMessage);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        window.handleLogin = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const email = form.email.value;
+            const password = form.password.value;
+            
+            setLoading(true);
+            
+            if (isDummyConfig) {
+                // Mock Admin Login credentials
+                const isAdmin = (email === 'admin@finvest.com' && password === 'adminpass');
+                
+                userId = isAdmin ? 'MOCK-ADMIN-FINVEST-001' : 'MOCK-USER-FINVEST-PRO-7890';
+                userRole = isAdmin ? 'admin' : 'user';
+
+                showMessage('Welcome Back!', `You have successfully logged in as a ${userRole.toUpperCase()} (Mock Mode).`);
+                renderMainDashboard();
+                setLoading(false);
+                return;
+            }
+
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                // Note: In a real app, you would fetch the user's role from Firestore after successful login.
+                showMessage('Welcome Back!', 'You have successfully logged in.');
+            } catch (error) {
+                console.error("Login failed:", error);
+                const errorMessage = error.code.includes('invalid-credential') ? 'Invalid email or password.' :
+                                     error.code.includes('operation-not-allowed') ? 'Login failed: Email/Password authentication is disabled in Firebase console.' :
+                                     error.message;
+                showMessage('Login Failed', errorMessage);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+
+        window.handleLogout = async () => {
+            if (isDummyConfig) {
+                userId = null;
+                userRole = null;
+                renderAuthView(true);
+                showMessage('Logged Out', 'Successfully logged out of the mock application.');
+                return;
+            }
+            try {
+                await signOut(auth);
+                // onAuthStateChanged will handle rendering the login view
+            } catch (error) {
+                console.error("Logout failed:", error);
+                showMessage('Logout Error', 'Could not log out. Please try again.');
+            }
+        };
+
+
+        // --- Initial Application Load ---
+        window.onload = initFirebase;
+
+        // Expose functions globally
+        window.renderAuthView = renderAuthView;
+
+    </script>
+</body>
+</html>
