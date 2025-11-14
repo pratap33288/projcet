@@ -1,0 +1,274 @@
+// src/services/apiClient.js
+import axios from 'axios';
+
+/**
+ * API client with:
+ * - baseURL configurable by env
+ * - timeout
+ * - request interceptor to attach tokens
+ * - response interceptor to map errors
+ * - small retry/backoff helper for network flakiness
+ */
+
+const BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000'; // change in production
+const TIMEOUT = 8000;
+
+const apiClient = axios.create({
+  baseURL: BASE_URL,
+  timeout: TIMEOUT,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+// Optional: attach auth token from localStorage or from your AppState provider
+apiClient.interceptors.request.use((config) => {
+  try {
+    const token = localStorage.getItem('finvest_token'); // or get from context
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  } catch (e) { /* ignore */ }
+  return config;
+}, (err) => Promise.reject(err));
+
+// Response interceptor to normalize errors
+apiClient.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    // Normalize error object
+    const error = {
+      status: err.response?.status || null,
+      message: err.response?.data?.message || err.message || 'Network error',
+      code: err.code || null,
+      original: err,
+    };
+    return Promise.reject(error);
+  }
+);
+
+/** Simple retry utility with exponential backoff */
+export async function retryRequest(fn, { retries = 2, initialDelay = 300 } = {}) {
+  let attempt = 0;
+  let delay = initialDelay;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (++attempt > retries) throw err;
+      // only retry for network or 5xx errors (not 4xx)
+      const status = err.status || err.original?.response?.status;
+      if (status && status >= 400 && status < 500) throw err;
+      await new Promise(res => setTimeout(res, delay));
+      delay *= 2;
+    }
+  }
+}
+
+export default apiClient;
+// src/services/fundsService.js
+import apiClient, { retryRequest } from './apiClient';
+
+/**
+ * All service functions return Promise resolving to { data, meta? }
+ * They accept an optional `opts` object with:
+ * - signal (AbortSignal) to allow cancellation
+ * - retry options: { retries, initialDelay }
+ */
+
+// Simple response mapper
+const mapListResponse = (resp) => ({ data: resp.data, status: resp.status });
+
+export async function fetchFunds({ page = 1, pageSize = 20, q = '', signal = null, retry = { retries: 1 } } = {}) {
+  const fn = () => apiClient.get('/funds', { params: { page, pageSize, q }, signal }).then(mapListResponse);
+  return retryRequest(fn, retry);
+}
+
+export async function fetchFundById(id, { signal = null, retry = { retries: 1 } } = {}) {
+  const fn = () => apiClient.get(`/funds/${id}`, { signal }).then(mapListResponse);
+  return retryRequest(fn, retry);
+}
+
+export async function investInFund(fundId, payload, { signal = null } = {}) {
+  // payload: { amount, bankLast4, paymentMethod }
+  return apiClient.post(`/funds/${fundId}/invest`, payload, { signal }).then(res => ({ data: res.data, status: res.status }));
+}
+
+// Admin endpoints
+export async function submitFund(fundData, { signal = null } = {}) {
+  return apiClient.post('/admin/funds', fundData, { signal }).then(res => ({ data: res.data, status: res.status }));
+}
+
+export async function approvePendingFund(pendingId, { signal = null } = {}) {
+  return apiClient.post(`/admin/pending/${pendingId}/approve`, {}, { signal }).then(res => ({ data: res.data, status: res.status }));
+}
+
+export async function rejectPendingFund(pendingId, reason = '', { signal = null } = {}) {
+  return apiClient.post(`/admin/pending/${pendingId}/reject`, { reason }, { signal }).then(res => ({ data: res.data, status: res.status }));
+}
+// src/hooks/useApi.js
+import { useEffect, useRef, useState } from 'react';
+
+/**
+ * useApi - small reusable hook to call a promise-returning function and manage loading/error/data
+ * fn should be an async function that accepts { signal } parameter (see fundsService)
+ *
+ * returns: { data, error, loading, refetch, cancel }
+ */
+export default function useApi(fn, args = [], auto = true) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(auto);
+  const controllerRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (auto) execute(...args);
+    return () => {
+      mountedRef.current = false;
+      cancel();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — caller controls when to re-run via refetch
+
+  async function execute(...callArgs) {
+    cancel(); // cancel prior
+    controllerRef.current = new AbortController();
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await fn(...callArgs, { signal: controllerRef.current.signal });
+      if (!mountedRef.current) return;
+      setData(resp.data ?? resp);
+      setLoading(false);
+      return resp;
+    } catch (err) {
+      if (err && (err.name === 'CanceledError' || err.name === 'AbortError')) {
+        // aborted — ignore
+        return;
+      }
+      setError(err);
+      setLoading(false);
+      throw err;
+    }
+  }
+
+  function cancel() {
+    if (controllerRef.current) {
+      try { controllerRef.current.abort(); } catch (e) { /* ignore */ }
+      controllerRef.current = null;
+    }
+  }
+
+  return { data, error, loading, refetch: execute, cancel };
+}
+// src/hooks/useFunds.js
+import { useMemo } from 'react';
+import useApi from './useApi';
+import { fetchFunds } from '../services/fundsService';
+
+/**
+ * useFunds provides:
+ * - data: array
+ * - meta: current page info (if backend provides)
+ * - loading, error
+ * - refetch({ page, pageSize, q })
+ *
+ * It internally uses small in-memory cache keyed by query to avoid refetch during quick navigations.
+ */
+
+const cache = new Map();
+
+export default function useFunds({ page = 1, pageSize = 20, q = '' } = {}) {
+  const cacheKey = `${page}|${pageSize}|${q}`;
+
+  const fn = (opts = {}, { signal } = {}) => fetchFunds({ ...opts, signal });
+
+  const { data, error, loading, refetch, cancel } = useApi((opts, { signal } = {}) => fn(opts, { signal }), [{ page, pageSize, q }], true);
+
+  // store in simple cache
+  if (!loading && data && Array.isArray(data)) cache.set(cacheKey, data);
+
+  const cachedData = useMemo(() => cache.get(cacheKey) || null, [cacheKey]);
+
+  return {
+    funds: data || cachedData || [],
+    loading,
+    error,
+    refetch, // call like refetch({ page: 2, pageSize: 10, q: 'tech' })
+    cancel,
+  };
+}
+{
+  "funds": [
+    { "id": "F001", "name": "Tech Giants Index", "category": "Equity", "aum": 45.2, "returnYTD": 22.1, "return3Y": 15.5, "expenseRatio": 0.95, "rating": 5, "description": "..." },
+    { "id": "F002", "name": "Money Market Liquidity", "category": "Debt", "aum": 18.9, "returnYTD": 5.1, "return3Y": 4.8, "expenseRatio": 0.2, "rating": 4, "description": "..." }
+  ],
+  "pending": [
+    { "id": "P001", "name": "AI Robotics Fund", "sponsor": "Alpha Assets", "date": "2025-10-20" }
+  ]
+}
+npm install -g json-server
+json-server --watch src/mock/server.json --port 4000
+# server available at http://localhost:4000
+curl http://localhost:4000/funds
+curl http://localhost:4000/funds/F001
+# Simulate invest (json-server supports POST but not custom routes out-of-the-box)
+curl -X POST http://localhost:4000/invest -H 'Content-Type: application/json' -d '{"fundId":"F001","amount":500}'
+// src/pages/Dashboard.jsx (excerpt)
+import React, { useState } from 'react';
+import useFunds from '../hooks/useFunds';
+import FundCard from '../components/FundCard';
+
+export default function Dashboard() {
+  const [q, setQ] = useState('');
+  const { funds, loading, error, refetch } = useFunds({ page: 1, pageSize: 12, q });
+
+  if (loading) return <div className="p-6">Loading funds...</div>;
+  if (error) return <div className="p-6 text-red-600">Error: {error.message || 'Failed'}</div>;
+
+  return (
+    <div>
+      <div className="mb-4">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search funds" />
+        <button onClick={() => refetch({ page:1, pageSize:12, q })}>Search</button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {funds.map(f => <FundCard key={f.id} fund={f} />)}
+      </div>
+    </div>
+  );
+}
+import React, { useState } from 'react';
+import { investInFund } from '../services/fundsService';
+
+function InvestForm({ fundId, onSuccess }) {
+  const [amount, setAmount] = useState(500);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const controllerRef = React.useRef(null);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr(null);
+    setLoading(true);
+    controllerRef.current = new AbortController();
+    try {
+      const resp = await investInFund(fundId, { amount }, { signal: controllerRef.current.signal });
+      onSuccess && onSuccess(resp.data);
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      setErr(error.message || 'Investment failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => () => controllerRef.current?.abort(), []);
+
+  return (
+    <form onSubmit={submit}>
+      <input type="number" value={amount} onChange={e => setAmount(Number(e.target.value))} min={100} />
+      <button disabled={loading}>{loading ? 'Processing...' : 'Invest'}</button>
+      {err && <div className="text-red-600">{err}</div>}
+    </form>
+  );
+}
