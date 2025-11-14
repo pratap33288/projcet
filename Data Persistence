@@ -1,0 +1,260 @@
+// src/hooks/useLocalStorage.js
+import { useEffect, useState } from 'react';
+
+/**
+ * useLocalStorage(key, initialValue, options)
+ * - options.rehydrate?: (v) => parsedValue // optional transform on load
+ */
+export default function useLocalStorage(key, initialValue, options = {}) {
+  const { rehydrate } = options;
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return initialValue;
+      const parsed = JSON.parse(raw);
+      return rehydrate ? rehydrate(parsed) : parsed;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch (e) {
+      // ignore quota errors in private mode
+      console.warn('Failed to persist to localStorage', e);
+    }
+  }, [key, state]);
+
+  return [state, setState];
+}
+// src/hooks/useSessionStorage.js
+import { useEffect, useState } from 'react';
+
+export default function useSessionStorage(key, initialValue) {
+  const [state, setState] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try { sessionStorage.setItem(key, JSON.stringify(state)); } catch {}
+  }, [key, state]);
+
+  return [state, setState];
+}
+// src/services/idb.js
+// Tiny IndexedDB promise wrapper for simple KV stores and object stores.
+const DB_NAME = 'finvest_db';
+const DB_VERSION = 1;
+const STORE_NAMES = { CACHE: 'cache', WATCHLIST: 'watchlist' };
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (ev) => {
+      const db = ev.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAMES.CACHE)) {
+        db.createObjectStore(STORE_NAMES.CACHE);
+      }
+      if (!db.objectStoreNames.contains(STORE_NAMES.WATCHLIST)) {
+        db.createObjectStore(STORE_NAMES.WATCHLIST);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function withStore(storeName, mode, callback) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, mode);
+    const store = tx.objectStore(storeName);
+    const req = callback(store);
+    tx.oncomplete = () => resolve(req.result);
+    tx.onerror = () => reject(tx.error || req.error);
+  });
+}
+
+export const idb = {
+  async get(store, key) {
+    return withStore(store, 'readonly', (s) => s.get(key));
+  },
+  async set(store, key, value) {
+    return withStore(store, 'readwrite', (s) => s.put(value, key));
+  },
+  async delete(store, key) {
+    return withStore(store, 'readwrite', (s) => s.delete(key));
+  },
+  async keys(store) {
+    return withStore(store, 'readonly', (s) => s.getAllKeys());
+  },
+  async clear(store) {
+    return withStore(store, 'readwrite', (s) => s.clear());
+  },
+  STORE_NAMES,
+};
+import { idb } from '../services/idb';
+// save cached funds
+await idb.set(idb.STORE_NAMES.CACHE, 'funds_v1', fundsArray);
+// retrieve
+const funds = await idb.get(idb.STORE_NAMES.CACHE, 'funds_v1');
+// src/services/persistenceService.js
+import { idb } from './idb';
+
+const PERSIST_VERSION = 1; // increment when shape changes
+const META_KEY = 'finvest_meta_v1';
+const PREFS_KEY = 'finvest_prefs_v1';
+
+// Defaults
+const DEFAULT_PREFS = { theme: 'light', language: 'en' };
+
+function readMeta() {
+  try {
+    const raw = localStorage.getItem(META_KEY);
+    return raw ? JSON.parse(raw) : { version: PERSIST_VERSION };
+  } catch { return { version: PERSIST_VERSION }; }
+}
+
+function writeMeta(meta) {
+  try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch {}
+}
+
+// Prefs (small)
+export function savePrefs(prefs) {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ version: PERSIST_VERSION, prefs })); } catch {}
+}
+export function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw);
+    // migration hook can be added here
+    return parsed.prefs || DEFAULT_PREFS;
+  } catch { return DEFAULT_PREFS; }
+}
+
+// Watchlist (IndexedDB)
+export async function saveWatchlist(watchlist) {
+  try {
+    await idb.set(idb.STORE_NAMES.WATCHLIST, 'watchlist_v1', watchlist || []);
+  } catch (e) { console.warn('Failed to save watchlist', e); }
+}
+export async function loadWatchlist() {
+  try {
+    const v = await idb.get(idb.STORE_NAMES.WATCHLIST, 'watchlist_v1');
+    return v || [];
+  } catch { return []; }
+}
+
+// Cached funds (IndexedDB)
+export async function saveCachedFunds(funds) {
+  try { await idb.set(idb.STORE_NAMES.CACHE, 'funds_v1', funds || []); } catch (e) { console.warn(e); }
+}
+export async function loadCachedFunds() {
+  try {
+    const v = await idb.get(idb.STORE_NAMES.CACHE, 'funds_v1');
+    return v || [];
+  } catch { return []; }
+}
+
+// Migration example: increment PERSIST_VERSION and add handling here
+export async function migrateIfNeeded() {
+  const meta = readMeta();
+  if (meta.version < PERSIST_VERSION) {
+    // Example: prior version stored watchlist as comma-separated strings in localStorage: migrate to IDB array
+    // if (meta.version === 0) { ... }
+    // After any migration:
+    writeMeta({ version: PERSIST_VERSION });
+  }
+}
+
+// Clear everything (for debugging)
+export async function clearAll() {
+  try {
+    localStorage.removeItem(PREFS_KEY);
+    localStorage.removeItem(META_KEY);
+    await idb.clear(idb.STORE_NAMES.CACHE);
+    await idb.clear(idb.STORE_NAMES.WATCHLIST);
+  } catch (e) { console.warn('clearAll failed', e); }
+}
+// src/hooks/usePersistentAppState.js
+import { useEffect, useState } from 'react';
+import { loadPrefs, savePrefs, loadWatchlist, saveWatchlist, loadCachedFunds, saveCachedFunds, migrateIfNeeded } from '../services/persistenceService';
+
+export default function usePersistentAppState() {
+  const [prefs, setPrefs] = useState(() => loadPrefs());
+  const [watchlist, setWatchlist] = useState([]);
+  const [cachedFunds, setCachedFunds] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      await migrateIfNeeded();
+      const [w, f] = await Promise.all([loadWatchlist(), loadCachedFunds()]);
+      if (!mounted) return;
+      setWatchlist(w);
+      setCachedFunds(f);
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => { savePrefs(prefs); }, [prefs]);
+  useEffect(() => { saveWatchlist(watchlist); }, [watchlist]);
+  useEffect(() => { saveCachedFunds(cachedFunds); }, [cachedFunds]);
+
+  return { prefs, setPrefs, watchlist, setWatchlist, cachedFunds, setCachedFunds };
+}
+// in your firebase init file
+import { getAuth, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'firebase/auth';
+
+const auth = getAuth(app);
+// Choose local vs session persistence
+await setPersistence(auth, browserLocalPersistence); // persistent across browser sessions
+// or: await setPersistence(auth, browserSessionPersistence); // cleared when user closes tab
+// src/sw.js - very simple cache-first for static assets and network-first for /api
+const CACHE_NAME = 'finvest-static-v1';
+const STATIC_URLS = [
+  '/',
+  '/index.html',
+  '/favicon.ico',
+  // add css, js bundles if known, or use workbox in production
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(STATIC_URLS)));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  // API calls - network first then fallback to cache
+  if (url.pathname.startsWith('/api')) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        // optional: cache API responses
+        return res;
+      }).catch(() => caches.match(e.request))
+    );
+    return;
+  }
+  // static assets - cache-first
+  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+});
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      console.log('SW registered', reg.scope);
+    }).catch(err => console.warn('SW register failed', err));
+  });
+}
