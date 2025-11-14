@@ -1,0 +1,218 @@
+npm install react-router-dom
+# or
+yarn add react-router-dom
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import AppRouter from './router/AppRouter';
+import { AppStateProvider } from './context/AppStateProvider'; // or AuthProvider/useAuth you already have
+import './index.css';
+
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AppStateProvider>
+        <AppRouter />
+      </AppStateProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+import React, { Suspense, lazy } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Layout from '../components/Layout';
+import ProtectedRoute from './ProtectedRoute';
+import ScrollToTop from './ScrollToTop';
+
+// Lazy-loaded pages (code-splitting)
+const Login = lazy(() => import('../pages/Login'));
+const Dashboard = lazy(() => import('../pages/Dashboard'));
+const FundPage = lazy(() => import('../pages/FundPage'));
+const AdminPanel = lazy(() => import('../pages/AdminPanel'));
+const Settings = lazy(() => import('../pages/Settings'));
+const NotFound = lazy(() => import('../pages/NotFound'));
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center">Loading...</div>}>
+      <ScrollToTop />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route element={<Layout />}>
+          {/* Protected user route */}
+          <Route 
+            path="/" 
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/fund/:id" 
+            element={
+              <ProtectedRoute>
+                <FundPage />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* admin-only route */}
+          <Route 
+            path="/admin" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminPanel />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/settings" 
+            element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* Fallback */}
+          <Route path="404" element={<NotFound />} />
+          <Route path="*" element={<Navigate to="/404" replace />} />
+        </Route>
+      </Routes>
+    </Suspense>
+  );
+}
+import React from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAppState } from '../context/AppStateProvider'; // or useAuth()
+
+/**
+ * ProtectedRoute
+ * - children: component(s) to render if allowed
+ * - requiredRole: optional string ('admin'|'user')
+ */
+export default function ProtectedRoute({ children, requiredRole = null }) {
+  const { state } = useAppState();
+  const { user, role, loading } = state; // matches provider shape
+  const location = useLocation();
+
+  // while auth state resolves, show a spinner
+  if (loading) return <div className="p-8 text-center">Checking authentication...</div>;
+
+  if (!user) {
+    // redirect to login and keep where we came from
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  if (requiredRole && role !== requiredRole) {
+    // user authenticated but not authorized
+    return <div className="p-8 text-center text-red-600">Access denied — insufficient permissions</div>;
+  }
+
+  return children;
+}
+
+import React, { useState } from 'react';
+import { NavLink, useNavigate } from 'react-router-dom';
+import { useAppState } from '../context/AppStateProvider';
+
+export default function NavBar() {
+  const [open, setOpen] = useState(false);
+  const { state, actions } = useAppState();
+  const { user, role } = state;
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    actions.logout?.(); // provider logout helper
+    navigate('/login');
+  };
+
+  return (
+    <header className="bg-white shadow-sm">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-16 items-center">
+          <div className="flex items-center">
+            <NavLink to="/" className="text-xl font-bold text-indigo-600">FinVest</NavLink>
+            <nav className="hidden md:flex ml-6 space-x-3" aria-label="Main navigation">
+              <NavLink to="/" className={({isActive}) => isActive ? 'px-3 py-2 rounded bg-indigo-50 text-indigo-700' : 'px-3 py-2 rounded text-gray-700 hover:bg-indigo-50'}>Dashboard</NavLink>
+              <NavLink to="/fund/F001" className="px-3 py-2 rounded text-gray-700 hover:bg-indigo-50">Funds</NavLink>
+              {role === 'admin' && <NavLink to="/admin" className="px-3 py-2 rounded text-red-600 hover:bg-red-50">Admin</NavLink>}
+              <NavLink to="/settings" className="px-3 py-2 rounded text-gray-700 hover:bg-indigo-50">Settings</NavLink>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {user ? <span className="text-sm text-gray-700 hidden sm:inline">{user.email}</span> : null}
+            <button onClick={() => setOpen(o => !o)} aria-expanded={open} aria-controls="mobile-menu" className="md:hidden p-2 rounded bg-gray-100">
+              <span className="sr-only">Toggle menu</span>
+              {/* hamburger icon */}
+              <svg className="w-5 h-5" aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={open ? 'M6 18L18 6M6 6l12 12' : 'M4 6h16M4 12h16M4 18h16'} /></svg>
+            </button>
+
+            {user ? (
+              <button onClick={handleLogout} className="px-3 py-2 bg-red-500 text-white rounded">Logout</button>
+            ) : (
+              <NavLink to="/login" className="px-3 py-2 bg-indigo-600 text-white rounded">Login</NavLink>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile menu */}
+      <div id="mobile-menu" className={`${open ? 'block' : 'hidden'} md:hidden`}>
+        <nav className="px-2 pb-4 space-y-1">
+          <NavLink to="/" onClick={() => setOpen(false)} className="block px-3 py-2 rounded">Dashboard</NavLink>
+          <NavLink to="/fund/F001" onClick={() => setOpen(false)} className="block px-3 py-2 rounded">Funds</NavLink>
+          {role === 'admin' && <NavLink to="/admin" onClick={() => setOpen(false)} className="block px-3 py-2 rounded text-red-600">Admin</NavLink>}
+          <NavLink to="/settings" onClick={() => setOpen(false)} className="block px-3 py-2 rounded">Settings</NavLink>
+        </nav>
+      </div>
+    </header>
+  );
+}
+import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useAppState } from '../context/AppStateProvider';
+
+export default function Login() {
+  const { actions } = useAppState();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // where to return after login
+  const from = location.state?.from?.pathname || '/';
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const email = e.target.email.value;
+    const password = e.target.password.value;
+    // call provider login helper (demo)
+    actions.setUser?.({ uid: 'u-demo', email }, email === 'admin@finvest.com' ? 'admin' : 'user');
+    // navigate back to where user wanted to go
+    navigate(from, { replace: true });
+  };
+
+  return (
+    <div className="max-w-md mx-auto mt-20 bg-white p-8 rounded shadow">
+      <h2 className="text-2xl font-bold mb-4">Login</h2>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <input name="email" type="email" defaultValue="" placeholder="you@example.com" className="w-full border px-3 py-2 rounded" required />
+        <input name="password" type="password" className="w-full border px-3 py-2 rounded" required />
+        <button className="w-full bg-indigo-600 text-white py-2 rounded">Login</button>
+      </form>
+      <p className="mt-4 text-xs text-gray-500">Demo admin: admin@finvest.com / adminpass</p>
+    </div>
+  );
+}
+import React from 'react';
+import { Link } from 'react-router-dom';
+
+export default function NotFound() {
+  return (
+    <div className="p-12 text-center">
+      <h1 className="text-4xl font-bold mb-4">404</h1>
+      <p className="mb-6">Page not found.</p>
+      <Link to="/" className="px-4 py-2 bg-indigo-600 text-white rounded">Go Home</Link>
+    </div>
+  );
+}
