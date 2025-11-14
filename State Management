@@ -1,0 +1,301 @@
+// src/context/appActions.js
+export const ACTIONS = {
+  // Auth
+  SET_USER: 'SET_USER',
+  CLEAR_USER: 'CLEAR_USER',
+
+  // Theme & prefs
+  SET_THEME: 'SET_THEME',
+
+  // Funds
+  SET_FUNDS: 'SET_FUNDS',
+  SET_FUNDS_LOADING: 'SET_FUNDS_LOADING',
+  SET_FUNDS_ERROR: 'SET_FUNDS_ERROR',
+
+  // Watchlist
+  ADD_WATCH: 'ADD_WATCH',
+  REMOVE_WATCH: 'REMOVE_WATCH',
+
+  // UI
+  OPEN_MODAL: 'OPEN_MODAL',
+  CLOSE_MODAL: 'CLOSE_MODAL',
+};
+
+export const setUser = (user, role) => ({ type: ACTIONS.SET_USER, payload: { user, role } });
+export const clearUser = () => ({ type: ACTIONS.CLEAR_USER });
+
+export const setTheme = (theme) => ({ type: ACTIONS.SET_THEME, payload: theme });
+
+export const setFunds = (funds) => ({ type: ACTIONS.SET_FUNDS, payload: funds });
+export const setFundsLoading = (isLoading) => ({ type: ACTIONS.SET_FUNDS_LOADING, payload: isLoading });
+export const setFundsError = (error) => ({ type: ACTIONS.SET_FUNDS_ERROR, payload: error });
+
+export const addWatch = (fundId) => ({ type: ACTIONS.ADD_WATCH, payload: fundId });
+export const removeWatch = (fundId) => ({ type: ACTIONS.REMOVE_WATCH, payload: fundId });
+
+export const openModal = (name, payload = null) => ({ type: ACTIONS.OPEN_MODAL, payload: { name, payload } });
+export const closeModal = (name) => ({ type: ACTIONS.CLOSE_MODAL, payload: name });
+// src/context/appActions.js
+export const ACTIONS = {
+  // Auth
+  SET_USER: 'SET_USER',
+  CLEAR_USER: 'CLEAR_USER',
+
+  // Theme & prefs
+  SET_THEME: 'SET_THEME',
+
+  // Funds
+  SET_FUNDS: 'SET_FUNDS',
+  SET_FUNDS_LOADING: 'SET_FUNDS_LOADING',
+  SET_FUNDS_ERROR: 'SET_FUNDS_ERROR',
+
+  // Watchlist
+  ADD_WATCH: 'ADD_WATCH',
+  REMOVE_WATCH: 'REMOVE_WATCH',
+
+  // UI
+  OPEN_MODAL: 'OPEN_MODAL',
+  CLOSE_MODAL: 'CLOSE_MODAL',
+};
+
+export const setUser = (user, role) => ({ type: ACTIONS.SET_USER, payload: { user, role } });
+export const clearUser = () => ({ type: ACTIONS.CLEAR_USER });
+
+export const setTheme = (theme) => ({ type: ACTIONS.SET_THEME, payload: theme });
+
+export const setFunds = (funds) => ({ type: ACTIONS.SET_FUNDS, payload: funds });
+export const setFundsLoading = (isLoading) => ({ type: ACTIONS.SET_FUNDS_LOADING, payload: isLoading });
+export const setFundsError = (error) => ({ type: ACTIONS.SET_FUNDS_ERROR, payload: error });
+
+export const addWatch = (fundId) => ({ type: ACTIONS.ADD_WATCH, payload: fundId });
+export const removeWatch = (fundId) => ({ type: ACTIONS.REMOVE_WATCH, payload: fundId });
+
+export const openModal = (name, payload = null) => ({ type: ACTIONS.OPEN_MODAL, payload: { name, payload } });
+export const closeModal = (name) => ({ type: ACTIONS.CLOSE_MODAL, payload: name });
+// src/context/appReducer.js
+import { ACTIONS } from './appActions';
+
+export const initialState = {
+  user: null,           // { uid, email } or null
+  role: null,           // 'user' | 'admin' | null
+  theme: 'light',       // persisted
+  funds: [],            // fetched fund list
+  fundsLoading: false,
+  fundsError: null,
+  watchlist: [],        // list of fund ids persisted
+  modals: {},           // { modalName: { open: true, payload: {} } }
+};
+
+export function appReducer(state, action) {
+  switch (action.type) {
+    case ACTIONS.SET_USER:
+      return { ...state, user: action.payload.user, role: action.payload.role };
+    case ACTIONS.CLEAR_USER:
+      return { ...state, user: null, role: null };
+
+    case ACTIONS.SET_THEME:
+      return { ...state, theme: action.payload };
+
+    case ACTIONS.SET_FUNDS_LOADING:
+      return { ...state, fundsLoading: action.payload, fundsError: null };
+    case ACTIONS.SET_FUNDS:
+      return { ...state, funds: action.payload, fundsLoading: false, fundsError: null };
+    case ACTIONS.SET_FUNDS_ERROR:
+      return { ...state, fundsError: action.payload, fundsLoading: false };
+
+    case ACTIONS.ADD_WATCH:
+      if (state.watchlist.includes(action.payload)) return state;
+      return { ...state, watchlist: [...state.watchlist, action.payload] };
+    case ACTIONS.REMOVE_WATCH:
+      return { ...state, watchlist: state.watchlist.filter(id => id !== action.payload) };
+
+    case ACTIONS.OPEN_MODAL:
+      return { ...state, modals: { ...state.modals, [action.payload.name]: { open: true, payload: action.payload.payload } } };
+    case ACTIONS.CLOSE_MODAL:
+      return { ...state, modals: { ...state.modals, [action.payload]: { open: false, payload: null } } };
+
+    default:
+      return state;
+  }
+}
+// src/context/AppStateProvider.jsx
+import React, { createContext, useContext, useEffect, useReducer, useCallback } from 'react';
+import { appReducer, initialState } from './appReducer';
+import * as actions from './appActions';
+import * as api from '../services/api'; // your API (axios) wrapper
+
+const PERSIST_KEY = 'finvest_state_v1';
+
+const AppStateContext = createContext();
+
+export function AppStateProvider({ children }) {
+  // hydrate initial state from localStorage (prefs only)
+  const persisted = (() => {
+    try {
+      const raw = localStorage.getItem(PERSIST_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // only allow certain keys to persist
+      return {
+        ...initialState,
+        theme: parsed.theme || initialState.theme,
+        watchlist: parsed.watchlist || initialState.watchlist,
+      };
+    } catch {
+      return null;
+    }
+  })();
+
+  const [state, dispatch] = useReducer(appReducer, persisted || initialState);
+
+  // Persist safe keys when they change
+  useEffect(() => {
+    try {
+      const toPersist = { theme: state.theme, watchlist: state.watchlist };
+      localStorage.setItem(PERSIST_KEY, JSON.stringify(toPersist));
+    } catch (e) {
+      // ignore storage failure
+    }
+  }, [state.theme, state.watchlist]);
+
+  // Async action: fetch funds
+  const fetchFunds = useCallback(async () => {
+    dispatch(actions.setFundsLoading(true));
+    try {
+      const resp = await api.fetchFunds(); // expects { data: [...] }
+      dispatch(actions.setFunds(resp.data));
+    } catch (err) {
+      dispatch(actions.setFundsError(err.message || 'Failed to load funds'));
+    }
+  }, []);
+
+  // Auth helpers (demo)
+  const setUser = useCallback((user, role) => dispatch(actions.setUser(user, role)), []);
+  const logout = useCallback(() => dispatch(actions.clearUser()), []);
+
+  // Watchlist helpers
+  const addToWatch = useCallback((fundId) => dispatch(actions.addWatch(fundId)), []);
+  const removeFromWatch = useCallback((fundId) => dispatch(actions.removeWatch(fundId)), []);
+
+  // Modal helpers
+  const openModal = useCallback((name, payload = null) => dispatch(actions.openModal(name, payload)), []);
+  const closeModal = useCallback((name) => dispatch(actions.closeModal(name)), []);
+
+  // Expose a compact API
+  const apiRef = {
+    fetchFunds,
+    setUser,
+    logout,
+    addToWatch,
+    removeFromWatch,
+    openModal,
+    closeModal,
+    dispatch, // for advanced use
+  };
+
+  // optionally fetch funds on mount
+  useEffect(() => { fetchFunds(); }, [fetchFunds]);
+
+  return (
+    <AppStateContext.Provider value={{ state, actions: apiRef }}>
+      {children}
+    </AppStateContext.Provider>
+  );
+}
+
+export function useAppState() {
+  const ctx = useContext(AppStateContext);
+  if (!ctx) throw new Error('useAppState must be used inside AppStateProvider');
+  return ctx;
+}
+// src/services/api.js
+import axios from 'axios';
+
+// In demo mode this returns mock data; in prod set baseURL to your backend
+const api = axios.create({ baseURL: '/api', timeout: 7000 });
+
+const MOCK_FUNDS = [
+  { id: 'F001', name: 'Tech Giants Index', returnYTD: 22.1, return3Y: 15.5, rating: 5, aum: 45.2, category: 'Equity' },
+  { id: 'F002', name: 'Money Market Liquidity', returnYTD: 5.1, return3Y: 4.8, rating: 4, aum: 18.9, category: 'Debt' },
+];
+
+export async function fetchFunds(opts = {}) {
+  // simulate network latency in demo
+  if (process.env.NODE_ENV === 'development') {
+    await new Promise(r => setTimeout(r, 300));
+    return { data: MOCK_FUNDS };
+  }
+  const resp = await api.get('/funds', { signal: opts.signal });
+  return resp;
+}
+
+export default api;
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App';
+import { AppStateProvider } from './context/AppStateProvider';
+import { BrowserRouter } from 'react-router-dom';
+
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AppStateProvider>
+        <App />
+      </AppStateProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+// inside a component
+import React from 'react';
+import { useAppState } from '../context/AppStateProvider';
+
+function DashboardHeader() {
+  const { state, actions } = useAppState();
+  const { theme, funds } = state;
+
+  return (
+    <header>
+      <h1>FinVest — {funds.length} funds</h1>
+      <button onClick={() => actions.setUser({ uid: 'u1', email: 'me@x.com' }, 'user')}>Set Demo User</button>
+      <button onClick={() => actions.openModal('invest', { fundId: 'F001' })}>Open Invest Modal</button>
+    </header>
+  );
+}
+import React from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAppState } from '../context/AppStateProvider';
+
+export default function ProtectedRoute({ children, requiredRole }) {
+  const { state } = useAppState();
+  const { user, role } = state;
+  if (!user) return <Navigate to="/login" replace />;
+  if (requiredRole && role !== requiredRole) return <Navigate to="/" replace />;
+  return children;
+}
+// store/index.js
+import { configureStore } from '@reduxjs/toolkit';
+import appReducer from './slices/appSlice';
+
+export default configureStore({ reducer: { app: appReducer } });
+// store/slices/appSlice.js
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import * as api from '../../services/api';
+
+export const fetchFunds = createAsyncThunk('app/fetchFunds', async () => {
+  const resp = await api.fetchFunds();
+  return resp.data;
+});
+
+const appSlice = createSlice({
+  name: 'app',
+  initialState: { user: null, role: null, theme:'light', funds: [], fundsLoading:false, fundsError:null, watchlist:[] },
+  reducers: { setUser: (s,a)=>{ s.user=a.payload.user; s.role=a.payload.role }, addWatch:(s,a)=>{ if(!s.watchlist.includes(a.payload)) s.watchlist.push(a.payload) }, removeWatch:(s,a)=>{ s.watchlist=s.watchlist.filter(id=>id!==a.payload) } },
+  extraReducers: builder => {
+    builder.addCase(fetchFunds.pending, (s)=>{ s.fundsLoading=true; s.fundsError=null });
+    builder.addCase(fetchFunds.fulfilled, (s, action)=>{ s.funds=action.payload; s.fundsLoading=false });
+    builder.addCase(fetchFunds.rejected, (s, action)=>{ s.fundsError=action.error.message; s.fundsLoading=false });
+  }
+});
+
+export const { setUser, addWatch, removeWatch } = appSlice.actions;
+export default appSlice.reducer;
